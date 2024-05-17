@@ -7,4 +7,4 @@ This is a minimal text editor built in C based on [kilo](http://antirez.com/news
   
 ## Compiling and Running
 - You can choose to compile using `cc simple-text-editor.c -o simple-text-editor` in your shell to produce the executable and run using `./simple-text-editor` afterwards.
-- I have a `Makefile`, so you can call `make` in your shell to compile the program (you may see some warnings, but it should be fine) and run using `./simple-text-editor`.
+- There is a `Makefile` included, so you can call `make` in your shell to compile the program (you may see some warnings, but it should be fine) and run using `./simple-text-editor`.
