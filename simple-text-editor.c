@@ -5,16 +5,33 @@
 #include <stdio.h> // Access printf(), perror()
 #include <stdlib.h> // Access atexit(), exit()
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
-#include <unistd.h> // Access read(), STDIN_FILENO
+#include <unistd.h> // Access read(), STDIN_FILENO, write()
+
+/*** defines ***/
+
+#define CTRL_KEY(k) ((k) & 0x1f) // CTRL keypress macro
 
 /*** data ***/
 
-struct termios orig_termios; // Store original terminal attributes
+// Global struct to contain editor state
+struct editorConfig {
+    // Store original terminal attributes
+    struct termios orig_termios; 
+};
+
+struct editorConfig E;
 
 /*** terminal ***/
 
-// Print error message and exit program
+// Error handling
 void die(const char *s) {
+    // Clear entire screen and reposition cursor
+    // to avoid printing error message at cursor's 
+    // recent position when error occurs during rendering
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+
+    // Print error and exit program
     perror(s);
     exit(1);
 }
@@ -22,7 +39,7 @@ void die(const char *s) {
 // Restore original terminal attributes after enabling raw mode and exiting program
 void disableRawMode() {
     // Discard any unread input before restoring terminal attributes
-    if (tcsetattr(STDERR_FILENO, TCSAFLUSH, &orig_termios) == -1)
+    if (tcsetattr(STDERR_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
         die("tcsetattr");
 }
 
@@ -31,13 +48,13 @@ void disableRawMode() {
 // modifying it, and writing new terminal attributes back out
 void enableRawMode() {
     // Store original terminal attributes into global struct
-    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) die("tcgetattr");
+    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
 
     // disableRawMode called when program exits
     atexit(disableRawMode);   
 
     // Declare new struct which will record all the I/O attributes of a terminal
-    struct termios raw = orig_termios;
+    struct termios raw = E.orig_termios;
 
     // Turn off break condition that can cause SIGINT to be sent
     // Turn off translating carriage returns to newlines
@@ -67,34 +84,83 @@ void enableRawMode() {
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 1;
 
-    // Read current terminal attributes into struct
-    tcgetattr(STDIN_FILENO, &raw);
-
     // Set the modified terminal attributes for standard input
     // TCSAFLUSH for applying changes after flushing input buffer to discard any unread input
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
+}
+
+// Read and return keypress inputs
+char editorReadKey() {
+    int nread;
+    char c;
+
+    // Keep reading 1 byte from standard input into variable c until there are no more bytes to read
+    // read() returns number of bytes read, will return 0 when it reaches the end of a file
+    while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+        if (nread == -1 && errno != EAGAIN) die("read");
+    }
+
+    return c;
+}
+
+/*** output ***/
+
+// Draw column of tildes (similar to vim)
+void editorDrawRows() {
+    int y;
+
+    // Draw tildes in each row
+    // TODO: Don't currently know size of terminal, defaulting to 24 rows
+    for (y = 0; y < 24; y++) {
+        write(STDOUT_FILENO, "~\r\n", 3);
+    }
+}
+
+// Clear screen and reposition cursor for rendering 
+// editor UI after each keypress
+void editorRefreshScreen() {
+    // Write 4 bytes out to terminal
+    // Byte 1 is \x1b (escape char) and other 3 bytes 
+    // are [2J (arg for clearing entire screen)
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+
+    // Write 3 bytes out to terminal
+    // Byte 1 is \x1b (escape char) and other 2 bytes 
+    // are [H (arg for repositioning cursor at row 1 column 1)
+    write(STDOUT_FILENO, "\x1b[H", 3);
+
+    // Draw tilde row buffer
+    editorDrawRows();
+
+    // Reposition cursor
+    write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+/*** input ***/
+
+// Map keypresses to editor operations
+void editorProcessKeypress() {
+    // Get returned keypress
+    char c = editorReadKey();
+
+    switch (c) {
+        // Exit program, clear screen, and reset cursor position
+        case CTRL_KEY('q'):
+            write(STDOUT_FILENO, "\x1b[2J", 4);
+            write(STDOUT_FILENO, "\x1b[H", 3);
+            exit(0);
+            break;
+    }
 }
 
 /*** init ***/
 
 int main() {
     enableRawMode();
-    
-    // Keep reading 1 byte from standard input into variable c until there are no more bytes to read
-    // read() returns number of bytes read, will return 0 when it reaches the end of a file
-    // Program will exit when q keypress is read from the user
-    while (1) {
-        char c = '\0';
 
-        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) die("read");
-        
-        if (iscntrl(c)) {
-            printf("%d\r\n", c);
-        } else {
-            printf("%d ('%c')\r\n", c, c);
-        }   
-        
-        if (c == 'q') break;
+    while (1) {
+        editorRefreshScreen();
+        editorProcessKeypress();
     }
 
     return 0;
