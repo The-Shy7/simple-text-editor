@@ -2,8 +2,9 @@
 
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
-#include <stdio.h> // Access printf(), perror()
+#include <stdio.h> // Access printf(), perror(), sscanf()
 #include <stdlib.h> // Access atexit(), exit()
+#include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
 #include <unistd.h> // Access read(), STDIN_FILENO, write()
 
@@ -15,6 +16,12 @@
 
 // Global struct to contain editor state
 struct editorConfig {
+    // Number of current rows 
+    int screenrows;
+
+    // Number of current columns
+    int screencols; 
+
     // Store original terminal attributes
     struct termios orig_termios; 
 };
@@ -103,16 +110,76 @@ char editorReadKey() {
     return c;
 }
 
+// 
+int getCursorPosition(int *rows, int *cols) {
+    // Buffer to hold escape sequence response for parsing
+    char buf[32];
+    
+    unsigned int i = 0;
+
+    // Get cursor position
+    // Response would be in the form: <esc>[24;80R (or something similar)
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
+    
+    // Keep reading characters until 'R' (the ending character from the previous write response)
+    while (i < sizeof(buf) - 1) {
+        if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
+        if (buf[i] == 'R') break;
+        i++;
+    }
+
+    // Assign 0 byte to final byte of buffer
+    // NOTE: Strings expected to end with 0 byte
+    buf[i] = '\0';
+
+    // If buffer doesn't contain escape character of '[' then fail
+    if (buf[0] != '\x1b' || buf[1] != '[') return -1;
+
+    // Parse response in buf, pass a pointer to third character in buf to skip escape character and '['
+    // String is the form: "integer;integer" and pass it to rows and cols variables
+    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
+    
+    return 0;
+}
+
+// Get the current terminal size in terms of number of rows and columns
+int getWindowSize(int *rows, int *cols) {
+    struct winsize ws;
+
+    // On success, put the number of columns and rows of the terminal to the winsize struct
+    // On failure or if the returned values are 0, return -1
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        // ioctl() not guaranteed to get window size on every system
+        // Move cursor to the bottom right corner, so we can measure size 
+        // using getCursorPosition() later
+        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
+        
+        // Get the window size 
+        return getCursorPosition(rows, cols);
+    } else {
+        // Set int references
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+
+        return 0;
+    }
+}
+
 /*** output ***/
 
-// Draw column of tildes (similar to vim)
+// Draw row of tildes (similar to vim)
 void editorDrawRows() {
     int y;
 
-    // Draw tildes in each row
-    // TODO: Don't currently know size of terminal, defaulting to 24 rows
-    for (y = 0; y < 24; y++) {
-        write(STDOUT_FILENO, "~\r\n", 3);
+    // Draw tildes based on current number of rows in terminal
+    for (y = 0; y < E.screenrows; y++) {
+        // Output tilde in the row
+        write(STDOUT_FILENO, "~", 1);
+
+        // Print newline as last line
+        if (y < E.screenrows - 1) {
+            write(STDOUT_FILENO, "\r\n", 2);
+        }
     }
 }
 
@@ -155,8 +222,14 @@ void editorProcessKeypress() {
 
 /*** init ***/
 
+// Initialize all fields in global struct
+void initEditor() {
+  if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+}
+
 int main() {
     enableRawMode();
+    initEditor();
 
     while (1) {
         editorRefreshScreen();
