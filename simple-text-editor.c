@@ -3,7 +3,8 @@
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
 #include <stdio.h> // Access printf(), perror(), sscanf()
-#include <stdlib.h> // Access atexit(), exit()
+#include <stdlib.h> // Access atexit(), exit(), realloc(), free()
+#include <string.h> // Acess memcpy()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
 #include <unistd.h> // Access read(), STDIN_FILENO, write()
@@ -165,20 +166,56 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** append buffer ***/
+
+// Define dynamic string type
+// Consists of a pointer to our buffer in memory and a length
+struct abuf {
+  char *b;
+  int len;
+};
+
+#define ABUF_INIT {NULL, 0} // Represents empty buffer, acts as a constructor to abuf
+
+// Append to string to abuf
+void abAppend(struct abuf *ab, const char *s, int len) {
+    // Allocate memory (size of current string + size of appended string) 
+    // to hold new string, realloc() will either extend size 
+    // of memory block already allocated or free current memory
+    // and allocate new memory big enough to hold new string
+    char *new = realloc(ab->b, ab->len + len);
+
+    // If allocation fails, exit function
+    if (new == NULL) return;
+
+    // Copy string after end of current data in buffer
+    memcpy(&new[ab->len], s, len);
+
+    // Update pointer and length of abuf to new values
+    ab->b = new;
+    ab->len += len;
+}
+
+// Destructor to deallocate memory used by abuf
+void abFree(struct abuf *ab) {
+    // Deallocate to avoid memory leaks
+    free(ab->b);
+}
+
 /*** output ***/
 
 // Draw row of tildes (similar to vim)
-void editorDrawRows() {
+void editorDrawRows(struct abuf *ab) {
     int y;
 
     // Draw tildes based on current number of rows in terminal
     for (y = 0; y < E.screenrows; y++) {
         // Output tilde in the row
-        write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~", 1);
 
         // Print newline as last line
         if (y < E.screenrows - 1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
@@ -186,21 +223,30 @@ void editorDrawRows() {
 // Clear screen and reposition cursor for rendering 
 // editor UI after each keypress
 void editorRefreshScreen() {
+    // Initialize new abuf
+    struct abuf ab = ABUF_INIT;
+
     // Write 4 bytes out to terminal
     // Byte 1 is \x1b (escape char) and other 3 bytes 
     // are [2J (arg for clearing entire screen)
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    abAppend(&ab, "\x1b[2J", 4);
 
     // Write 3 bytes out to terminal
     // Byte 1 is \x1b (escape char) and other 2 bytes 
     // are [H (arg for repositioning cursor at row 1 column 1)
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[H", 3);
 
     // Draw tilde row buffer
-    editorDrawRows();
+    editorDrawRows(&ab);
 
     // Reposition cursor
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[H", 3);
+
+    // Write buffer's contents to standard output
+    write(STDOUT_FILENO, ab.b, ab.len);
+
+    // Free memory used by the abuf
+    abFree(&ab);
 }
 
 /*** input ***/
