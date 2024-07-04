@@ -2,21 +2,40 @@
 
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
-#include <stdio.h> // Access printf(), perror(), sscanf()
+#include <stdio.h> // Access printf(), perror(), sscanf(), snprintf()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free()
-#include <string.h> // Acess memcpy()
+#include <string.h> // Acess memcpy(), strlen()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
 #include <unistd.h> // Access read(), STDIN_FILENO, write()
 
 /*** defines ***/
 
+#define SIMPLE_TEXT_EDITOR_VERSION "0.0.1" // Version number for welcome message display
 #define CTRL_KEY(k) ((k) & 0x1f) // CTRL keypress macro
+
+// Keys that move the cursor or page in the editor
+// Represent keys with large integer values out of 
+// range for char to avoid conflicting with ordinary keypresses
+enum editorKey {
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    PAGE_UP,
+    PAGE_DOWN,
+    HOME_KEY,
+    END_KEY,
+    DEL_KEY
+};
 
 /*** data ***/
 
 // Global struct to contain editor state
 struct editorConfig {
+    // Cursor's x and y position
+    int cx, cy;
+
     // Number of current rows 
     int screenrows;
 
@@ -98,7 +117,7 @@ void enableRawMode() {
 }
 
 // Read and return keypress inputs
-char editorReadKey() {
+int editorReadKey() {
     int nread;
     char c;
 
@@ -108,10 +127,61 @@ char editorReadKey() {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
 
-    return c;
+    // Check if escape char is read
+    if (c == '\x1b') {
+        // Declare buffer to store escape sequence chars
+        char seq[3];
+        
+        // Read two more bytes into a buffer
+        // If either of the reads timeout (around 0.1s), then assume
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+        
+        // Look to see if escape sequence is a special [ or O char
+        // Depending on terminal emulator or OS, escape sequences can be <esc>[(int)~ or <esc>O(char)
+        if (seq[0] == '[') {
+            // Check if digit byte is between 0 and 9
+            // If it is, read the next byte and check for a tilde
+            // If it is a tilde, return the corresponding key if it's 1, 3, 4, 5, 6, 7, or 8
+            // Otherwise, return corresponding key if it's A, B, C, D, H, or F
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if (seq[2] == '~') {
+                    switch (seq[1]) {
+                        case '1': return HOME_KEY;
+                        case '3': return DEL_KEY;
+                        case '4': return END_KEY;
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                        case '7': return HOME_KEY;
+                        case '8': return END_KEY;
+                    }
+                }
+            } else {
+                switch (seq[1]) {
+                    case 'A': return ARROW_UP;
+                    case 'B': return ARROW_DOWN;
+                    case 'C': return ARROW_RIGHT;
+                    case 'D': return ARROW_LEFT;
+                    case 'H': return HOME_KEY;
+                    case 'F': return END_KEY;
+                }
+            }
+        } else if (seq[0] == 'O') {
+            switch (seq[1]) {
+                case 'H': return HOME_KEY;
+                case 'F': return END_KEY;
+            }
+        }
+
+        // Return escape char, if char isn't recognizable
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
 
-// 
+// Get the cursor position for displaying
 int getCursorPosition(int *rows, int *cols) {
     // Buffer to hold escape sequence response for parsing
     char buf[32];
@@ -210,8 +280,41 @@ void editorDrawRows(struct abuf *ab) {
 
     // Draw tildes based on current number of rows in terminal
     for (y = 0; y < E.screenrows; y++) {
-        // Output tilde in the row
-        abAppend(ab, "~", 1);
+        // Display welcome message a third of the way down the screen
+        if (y == E.screenrows / 3) {
+            // Buffer for welcome message
+            char welcome[80];
+
+            // Format welcome message string and store it in buffer
+            int welcomelen = snprintf(welcome, sizeof(welcome), 
+                "Simple text editor -- version %s", SIMPLE_TEXT_EDITOR_VERSION);
+
+            // Truncate string length if terminal is too small to fit the message
+            if (welcomelen > E.screencols) welcomelen = E.screencols;
+
+            // Divide screen width in half and subtract half of string's length
+            // Tells how far from left edge of screen to start printing string for centering
+            int padding = (E.screencols - welcomelen) / 2;
+
+            // Fill empty left space with space chars
+            // First character should be a tilde
+            if (padding) {
+                abAppend(ab, "~", 1);
+                padding--;
+            }
+            while (padding--) abAppend(ab, " ", 1);
+
+            // Append welcome message to abuf 
+            abAppend(ab, welcome, welcomelen);
+        } else {
+            // Output tilde in the row
+            abAppend(ab, "~", 1);
+        }
+
+        // Clear each line as they're redrawn instead 
+        // of clearing entire screen before each refresh
+        // Put <esc>[K sequence at the end of each line we draw
+        abAppend(ab, "\x1b[K", 3);
 
         // Print newline as last line
         if (y < E.screenrows - 1) {
@@ -226,10 +329,8 @@ void editorRefreshScreen() {
     // Initialize new abuf
     struct abuf ab = ABUF_INIT;
 
-    // Write 4 bytes out to terminal
-    // Byte 1 is \x1b (escape char) and other 3 bytes 
-    // are [2J (arg for clearing entire screen)
-    abAppend(&ab, "\x1b[2J", 4);
+    // Hide cursor before refreshing the screen
+    abAppend(&ab, "\x1b[?25l", 6);
 
     // Write 3 bytes out to terminal
     // Byte 1 is \x1b (escape char) and other 2 bytes 
@@ -239,8 +340,20 @@ void editorRefreshScreen() {
     // Draw tilde row buffer
     editorDrawRows(&ab);
 
-    // Reposition cursor
-    abAppend(&ab, "\x1b[H", 3);
+    // Declare buffer to store formatted string
+    char buf[32];
+
+    // Specify exact position we want cursor 
+    // to move to and store it in the buffer
+    // Add 1 to x and y position to convert 0 index values to 
+    // 1 index values that the terminal uses
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+
+    // Append formatted string to abuf
+    abAppend(&ab, buf, strlen(buf));
+
+    // Show cursor after refresh
+    abAppend(&ab, "\x1b[?25h", 6);
 
     // Write buffer's contents to standard output
     write(STDOUT_FILENO, ab.b, ab.len);
@@ -251,10 +364,36 @@ void editorRefreshScreen() {
 
 /*** input ***/
 
+// Allow user to move cursor using arrow keys if within the bounds
+void editorMoveCursor(int key) {
+    switch (key) {
+        case ARROW_LEFT:
+            if (E.cx != 0) {
+                E.cx--;
+            }
+            break;
+        case ARROW_RIGHT:
+            if (E.cx != E.screencols - 1) {
+                E.cx++;
+            }
+            break;
+        case ARROW_UP:
+            if (E.cy != 0) {
+                E.cy--;
+            }
+            break;
+        case ARROW_DOWN:
+            if (E.cy != E.screenrows - 1) {
+                E.cy++;
+            }
+            break;
+    }
+}
+
 // Map keypresses to editor operations
 void editorProcessKeypress() {
     // Get returned keypress
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c) {
         // Exit program, clear screen, and reset cursor position
@@ -263,6 +402,32 @@ void editorProcessKeypress() {
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
+
+        // TEMPORARY: Move cursor to left or right edges of screen
+        case HOME_KEY:
+            E.cx = 0;
+            break;
+        case END_KEY:
+            E.cx = E.screencols - 1;
+            break;
+
+        // TEMPORARY: Move cursor to top and bottom of screen
+        case PAGE_UP:
+        case PAGE_DOWN:
+            {
+                int times = E.screenrows;
+                while (times--) {
+                    editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+                }
+            }
+
+        // Move cursor 
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
+            break;
     }
 }
 
@@ -270,7 +435,10 @@ void editorProcessKeypress() {
 
 // Initialize all fields in global struct
 void initEditor() {
-  if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+    E.cx = 0;
+    E.cy = 0;
+    
+    if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
 int main() {
