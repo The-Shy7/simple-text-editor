@@ -1,11 +1,16 @@
 /*** includes ***/
 
+#define _DEFAULT_SOURCE // Enable default set of features provided by glibc
+#define _BSD_SOURCE // Enable BSD extensions in glibc
+#define _GNU_SOURCE // Enables all GNU extensions
+
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
-#include <stdio.h> // Access printf(), perror(), sscanf(), snprintf()
-#include <stdlib.h> // Access atexit(), exit(), realloc(), free()
+#include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline()
+#include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
 #include <string.h> // Acess memcpy(), strlen()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
+#include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
 #include <unistd.h> // Access read(), STDIN_FILENO, write()
 
@@ -31,19 +36,34 @@ enum editorKey {
 
 /*** data ***/
 
+// Data type for storing a row of text in the editor
+typedef struct erow {
+    // Length
+    int size;
+
+    // Allocated char data
+    char *chars;
+} erow;
+
 // Global struct to contain editor state
 struct editorConfig {
     // Cursor's x and y position
     int cx, cy;
 
-    // Number of current rows 
+    // Number of current rows in terminal screen
     int screenrows;
 
-    // Number of current columns
+    // Number of current columns in terminal screen
     int screencols; 
 
     // Store original terminal attributes
     struct termios orig_termios; 
+
+    // Number of displayed lines 
+    int numrows;
+
+    // Editor row 
+    erow row;
 };
 
 struct editorConfig E;
@@ -236,6 +256,61 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** file i/o ***/
+
+// Opens and reads a files from disk
+void editorOpen(char *filename) {
+    // Opens the file that the user passed as the arg for reading
+    FILE *fp = fopen(filename, "r");
+
+    // If fopen failed to open the file, error out
+    if (!fp) die("fopen");
+    
+    // Pointer that points to the buffer where the read message will be stored
+    char *line = NULL;
+
+    // Size of the buffer pointed to by the message pointer
+    size_t linecap = 0;
+
+    // Length of the message
+    ssize_t linelen;
+
+    // Read a line from the file and store to the allocated buffer
+    // Updates pointer and allocates necessary memory
+    linelen = getline(&line, &linecap, fp);
+
+    // Check if the returned value is not the end of the file 
+    // -1 indicates there are no more lines to read
+    if (linelen != -1) {
+        // Strip off newline or carriage return at the end of the line 
+        // before copying it to the erow since each erow represents one line of text
+        // there's no reason to store a newline character at the end of each one
+        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+            linelen--;
+
+        // Set editor row size to length of the message
+        E.row.size = linelen;
+
+        // Allocate memory for the message
+        E.row.chars = malloc(linelen + 1);
+
+        // Store message to chars field which points to the allocated memory
+        memcpy(E.row.chars, line, linelen);
+
+        // Terminate string with null char
+        E.row.chars[linelen] = '\0';
+
+        // Set to 1 to indicate that erow contains a line to be displayed
+        E.numrows = 1;
+    }
+
+    // Free the memory used by the buffer 
+    free(line);
+
+    // Close the file since we're done reading
+    fclose(fp);
+}
+
 /*** append buffer ***/
 
 // Define dynamic string type
@@ -280,35 +355,49 @@ void editorDrawRows(struct abuf *ab) {
 
     // Draw tildes based on current number of rows in terminal
     for (y = 0; y < E.screenrows; y++) {
-        // Display welcome message a third of the way down the screen
-        if (y == E.screenrows / 3) {
-            // Buffer for welcome message
-            char welcome[80];
+        // Check if we're drawing a row that comes after the end of the text buffer
+        // Otherwise, we're drawing a row that's part of the text buffer
+        if (y >= E.numrows) {
+            // Display welcome message a third of the way down the screen
+            // Displays when the user starts the program with no args (when text buffer is empty)
+            if (E.numrows == 0 && y == E.screenrows / 3) {
+                // Buffer for welcome message
+                char welcome[80];
 
-            // Format welcome message string and store it in buffer
-            int welcomelen = snprintf(welcome, sizeof(welcome), 
-                "Simple text editor -- version %s", SIMPLE_TEXT_EDITOR_VERSION);
+                // Format welcome message string and store it in buffer
+                int welcomelen = snprintf(welcome, sizeof(welcome), 
+                    "Simple text editor -- version %s", SIMPLE_TEXT_EDITOR_VERSION);
 
-            // Truncate string length if terminal is too small to fit the message
-            if (welcomelen > E.screencols) welcomelen = E.screencols;
+                // Truncate string length if terminal is too small to fit the message
+                if (welcomelen > E.screencols) welcomelen = E.screencols;
 
-            // Divide screen width in half and subtract half of string's length
-            // Tells how far from left edge of screen to start printing string for centering
-            int padding = (E.screencols - welcomelen) / 2;
+                // Divide screen width in half and subtract half of string's length
+                // Tells how far from left edge of screen to start printing string for centering
+                int padding = (E.screencols - welcomelen) / 2;
 
-            // Fill empty left space with space chars
-            // First character should be a tilde
-            if (padding) {
+                // Fill empty left space with space chars
+                // First character should be a tilde
+                if (padding) {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--) abAppend(ab, " ", 1);
+
+                // Append welcome message to abuf 
+                abAppend(ab, welcome, welcomelen);
+            } else {
+                // Output tilde in the row
                 abAppend(ab, "~", 1);
-                padding--;
             }
-            while (padding--) abAppend(ab, " ", 1);
-
-            // Append welcome message to abuf 
-            abAppend(ab, welcome, welcomelen);
         } else {
-            // Output tilde in the row
-            abAppend(ab, "~", 1);
+            // Get the length of the string
+            int len = E.row.size;
+
+            // Truncate the rendered line if it goes pass the end of the screen
+            if (len > E.screencols) len = E.screencols;
+
+            // Write out the string
+            abAppend(ab, E.row.chars, len);
         }
 
         // Clear each line as they're redrawn instead 
@@ -437,13 +526,18 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
     
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();
+
+    if (argc >= 2) {
+        editorOpen(argv[1]);
+    }
 
     while (1) {
         editorRefreshScreen();
