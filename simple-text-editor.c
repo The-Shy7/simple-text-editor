@@ -50,6 +50,9 @@ struct editorConfig {
     // Cursor's x and y position
     int cx, cy;
 
+    // Track of what row of the file the user is currently scrolled to
+    int rowoff;
+
     // Number of current rows in terminal screen
     int screenrows;
 
@@ -361,15 +364,33 @@ void abFree(struct abuf *ab) {
 
 /*** output ***/
 
+// Enable vertical scrolling
+void editorScroll() {
+    // Check if the cursor is above the visible window
+    // If it is, scroll up to the cursor
+    if (E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+    
+    // Check if the cursor is past the bottom of the visible window
+    // If it is, scroll down to the cursor 
+    if (E.cy >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
+
 // Draw row of tildes (similar to vim)
 void editorDrawRows(struct abuf *ab) {
     int y;
 
     // Draw tildes based on current number of rows in terminal
     for (y = 0; y < E.screenrows; y++) {
+        // Get row of the file we want to display
+        int filerow = y + E.rowoff;
+
         // Check if we're drawing a row that comes after the end of the text buffer
         // Otherwise, we're drawing a row that's part of the text buffer
-        if (y >= E.numrows) {
+        if (filerow >= E.numrows) {
             // Display welcome message a third of the way down the screen
             // Displays when the user starts the program with no args (when text buffer is empty)
             if (E.numrows == 0 && y == E.screenrows / 3) {
@@ -403,13 +424,13 @@ void editorDrawRows(struct abuf *ab) {
             }
         } else {
             // Get the length of the string
-            int len = E.row[y].size;
+            int len = E.row[filerow].size;
 
             // Truncate the rendered line if it goes pass the end of the screen
             if (len > E.screencols) len = E.screencols;
 
             // Write out the string
-            abAppend(ab, E.row[y].chars, len);
+            abAppend(ab, E.row[filerow].chars, len);
         }
 
         // Clear each line as they're redrawn instead 
@@ -427,6 +448,8 @@ void editorDrawRows(struct abuf *ab) {
 // Clear screen and reposition cursor for rendering 
 // editor UI after each keypress
 void editorRefreshScreen() {
+    editorScroll();
+
     // Initialize new abuf
     struct abuf ab = ABUF_INIT;
 
@@ -448,7 +471,7 @@ void editorRefreshScreen() {
     // to move to and store it in the buffer
     // Add 1 to x and y position to convert 0 index values to 
     // 1 index values that the terminal uses
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
 
     // Append formatted string to abuf
     abAppend(&ab, buf, strlen(buf));
@@ -484,7 +507,9 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_DOWN:
-            if (E.cy != E.screenrows - 1) {
+            // Allow cursor to advance past the bottom of the screen
+            // but not past the bottom of the file
+            if (E.cy < E.numrows) {
                 E.cy++;
             }
             break;
@@ -538,6 +563,7 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
     E.row = NULL;
     
