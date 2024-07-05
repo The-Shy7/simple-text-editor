@@ -53,6 +53,9 @@ struct editorConfig {
     // Track of what row of the file the user is currently scrolled to
     int rowoff;
 
+    // Track of what column of the file the user is currently scrolled to
+    int coloff;
+
     // Number of current rows in terminal screen
     int screenrows;
 
@@ -377,6 +380,18 @@ void editorScroll() {
     if (E.cy >= E.rowoff + E.screenrows) {
         E.rowoff = E.cy - E.screenrows + 1;
     }
+
+    // Check if the cursor is left of the visible window
+    // If it is, scroll lef to the cursor
+    if (E.cx < E.coloff) {
+        E.coloff = E.cx;
+    }
+
+    // Check if the cursor is horizontally past the visible window
+    // If it is, scroll right to the cursor
+    if (E.cx >= E.coloff + E.screencols) {
+        E.coloff = E.cx - E.screencols + 1;
+    }
 }
 
 // Draw row of tildes (similar to vim)
@@ -424,13 +439,19 @@ void editorDrawRows(struct abuf *ab) {
             }
         } else {
             // Get the length of the string
-            int len = E.row[filerow].size;
+            // Subtract the number of characters that are to the left of 
+            // offset from the length of the row
+            int len = E.row[filerow].size - E.coloff;
 
-            // Truncate the rendered line if it goes pass the end of the screen
-            if (len > E.screencols) len = E.screencols;
+            // len can be negative which means the user scrolled horizontally
+            // past the end of the line, in that case, set len to 0 so that
+            // nothing is displayed on that line
+            if (len < 0) len = 0;
 
             // Write out the string
-            abAppend(ab, E.row[filerow].chars, len);
+            // To display each row at the column offset,
+            // E.coloff is used an index for the chars of each erow displayed
+            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
         }
 
         // Clear each line as they're redrawn instead 
@@ -471,7 +492,7 @@ void editorRefreshScreen() {
     // to move to and store it in the buffer
     // Add 1 to x and y position to convert 0 index values to 
     // 1 index values that the terminal uses
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1);
 
     // Append formatted string to abuf
     abAppend(&ab, buf, strlen(buf));
@@ -497,9 +518,8 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_RIGHT:
-            if (E.cx != E.screencols - 1) {
-                E.cx++;
-            }
+            // User can scroll past the right edge of the screen
+            E.cx++;
             break;
         case ARROW_UP:
             if (E.cy != 0) {
@@ -564,6 +584,7 @@ void initEditor() {
     E.cx = 0;
     E.cy = 0;
     E.rowoff = 0;
+    E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
     
