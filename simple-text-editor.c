@@ -62,8 +62,8 @@ struct editorConfig {
     // Number of displayed lines 
     int numrows;
 
-    // Editor row 
-    erow row;
+    // Pointer to array of erow structs to store multiple lines
+    erow *row;
 };
 
 struct editorConfig E;
@@ -256,6 +256,32 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** row operations ***/
+
+// Appends line read from file to as new entry to erow struct array
+void editorAppendRow(char *s, size_t len) {
+    // Reallocate memory to resize array to append new line
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    // Index of the new row we want to initialize 
+    int at = E.numrows;
+
+    // Set row size to length of the line
+    E.row[at].size = len;
+
+    // Allocate memory for the line 
+    E.row[at].chars = malloc(len + 1);
+
+    // Store line to chars field which points to the allocated memory
+    memcpy(E.row[at].chars, s, len);
+
+    // Terminate string with null char
+    E.row[at].chars[len] = '\0';
+
+    // Update number of rows
+    E.numrows++;
+}
+
 /*** file i/o ***/
 
 // Opens and reads a files from disk
@@ -275,33 +301,19 @@ void editorOpen(char *filename) {
     // Length of the message
     ssize_t linelen;
 
-    // Read a line from the file and store to the allocated buffer
+    // Read lines from the file and store to the allocated buffer
     // Updates pointer and allocates necessary memory
-    linelen = getline(&line, &linecap, fp);
-
     // Check if the returned value is not the end of the file 
     // -1 indicates there are no more lines to read
-    if (linelen != -1) {
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
         // Strip off newline or carriage return at the end of the line 
         // before copying it to the erow since each erow represents one line of text
         // there's no reason to store a newline character at the end of each one
         while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
             linelen--;
 
-        // Set editor row size to length of the message
-        E.row.size = linelen;
-
-        // Allocate memory for the message
-        E.row.chars = malloc(linelen + 1);
-
-        // Store message to chars field which points to the allocated memory
-        memcpy(E.row.chars, line, linelen);
-
-        // Terminate string with null char
-        E.row.chars[linelen] = '\0';
-
-        // Set to 1 to indicate that erow contains a line to be displayed
-        E.numrows = 1;
+        // Append line to erow struct array
+        editorAppendRow(line, linelen);
     }
 
     // Free the memory used by the buffer 
@@ -391,13 +403,13 @@ void editorDrawRows(struct abuf *ab) {
             }
         } else {
             // Get the length of the string
-            int len = E.row.size;
+            int len = E.row[y].size;
 
             // Truncate the rendered line if it goes pass the end of the screen
             if (len > E.screencols) len = E.screencols;
 
             // Write out the string
-            abAppend(ab, E.row.chars, len);
+            abAppend(ab, E.row[y].chars, len);
         }
 
         // Clear each line as they're redrawn instead 
@@ -527,6 +539,7 @@ void initEditor() {
     E.cx = 0;
     E.cy = 0;
     E.numrows = 0;
+    E.row = NULL;
     
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
