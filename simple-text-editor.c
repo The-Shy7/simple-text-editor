@@ -684,23 +684,38 @@ void editorProcessKeypress() {
             exit(0);
             break;
 
-        // TEMPORARY: Move cursor to left or right edges of screen
+        // TEMPORARY: Move cursor to left edge of screen
         case HOME_KEY:
             E.cx = 0;
             break;
+        
+        // Move the cursor to the end of the current line
+        // If there's no current line then the cursor x position is 0
         case END_KEY:
-            E.cx = E.screencols - 1;
+            if (E.cy < E.numrows)
+                E.cx = E.row[E.cy].size;
             break;
 
-        // TEMPORARY: Move cursor to top and bottom of screen
+        // Scroll up and down the entire page
         case PAGE_UP:
         case PAGE_DOWN:
             {
+                if (c == PAGE_UP) {
+                    // Position the cursor top of the screen
+                    E.cy = E.rowoff;
+                } else if (c == PAGE_DOWN) {
+                    // Position cursor bottom of the screen
+                    E.cy = E.rowoff + E.screenrows - 1;
+                    if (E.cy > E.numrows) E.cy = E.numrows;
+                }
+
+                // Simulate an entire screen's worth of moving up or down keypresses
                 int times = E.screenrows;
                 while (times--) {
                     editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
                 }
             }
+            break;
 
         // Move cursor 
         case ARROW_UP:
