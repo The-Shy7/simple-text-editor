@@ -511,15 +511,37 @@ void editorRefreshScreen() {
 
 // Allow user to move cursor using arrow keys if within the bounds
 void editorMoveCursor(int key) {
+    // Since cursor y position is allowed to be one past the last
+    // line of the file, check if the cursor is on an actual line
+    // If it is, then row will point to the erow that the cursor is on
+    erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+
     switch (key) {
         case ARROW_LEFT:
+            // Decrement x position if it isn't 0
+            // Check if the cursor isn't on the first line, if it isn't,
+            // then allow the cursor to move to the end of the previous line
+            // if it is at the beginning of the current line
             if (E.cx != 0) {
                 E.cx--;
+            } else if (E.cy > 0) {
+                E.cy--;
+                E.cx = E.row[E.cy].size;
             }
             break;
         case ARROW_RIGHT:
-            // User can scroll past the right edge of the screen
-            E.cx++;
+            // Check if cursor x position is to the left
+            // of the end of the line before we allow
+            // cursor to move to the right
+            // Check if the cursor is at the end of a line 
+            // (not end of the file), if it is, then allow
+            // the cursor go to the start of the next line
+            if (row && E.cx < row->size) {
+                E.cx++;
+            } else if (row && E.cx == row->size) {
+                E.cy++;
+                E.cx = 0;
+            }
             break;
         case ARROW_UP:
             if (E.cy != 0) {
@@ -533,6 +555,22 @@ void editorMoveCursor(int key) {
                 E.cy++;
             }
             break;
+    }
+
+    // Since cursor y position is allowed to be one past the last
+    // line of the file, check if the cursor is on an actual line
+    // If it is, then row will point to the erow that the cursor is on
+    // Setting row again since y position could point to a different line than before
+    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+
+    // If row is null, then we consider it to be length 0
+    // Otherwise, set length to the current size of the row
+    int rowlen = row ? row->size : 0;
+
+    // Set cursor x position to the end of the line
+    // if it is to the right of the end of the line
+    if (E.cx > rowlen) {
+        E.cx = rowlen;
     }
 }
 
