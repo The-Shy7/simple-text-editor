@@ -17,6 +17,7 @@
 /*** defines ***/
 
 #define SIMPLE_TEXT_EDITOR_VERSION "0.0.1" // Version number for welcome message display
+#define TAB_STOP_LENGTH 8 // The length of a tab stop
 #define CTRL_KEY(k) ((k) & 0x1f) // CTRL keypress macro
 
 // Keys that move the cursor or page in the editor
@@ -41,8 +42,15 @@ typedef struct erow {
     // Length
     int size;
 
+    // Contains size of the contents of render
+    int rsize;
+
     // Allocated char data
     char *chars;
+
+    // Contains the actual chars to draw on the screen for the row
+    // Needed to render nonprintable control chars i.e. tabs
+    char *render;
 } erow;
 
 // Global struct to contain editor state
@@ -264,6 +272,45 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** row operations ***/
 
+// Use the string of an erow to fill the contents of the render string
+void editorUpdateRow(erow *row) {
+    int j;
+    int tabs = 0;
+    int idx = 0;
+
+    // Count the number of tabs contained in the string
+    // to know how much memory to allocate for render
+    for (j = 0; j < row->size; j++)
+        if (row->chars[j] == '\t') tabs++;
+
+    // Free any used memory from the render buffer in order to update it
+    free(row->render);
+
+    // Allocate memory to store render string
+    row->render = malloc(row->size + tabs * (TAB_STOP_LENGTH - 1) + 1);
+
+    // Copy chars stored in the erow to the render buffer
+    // Render tabs as multiple space chars
+    for (j = 0; j < row->size; j++) {
+        // If the char in the string is a tab, render it as a space
+        // and append spaces until we get to a tab stop (a column divisible by 8)
+        // Otherwise, copy the char directly to render
+        if (row->chars[j] == '\t') {
+            row->render[idx++] = ' ';
+            while (idx % TAB_STOP_LENGTH != 0) row->render[idx++] = ' ';
+        } else {
+            row->render[idx++] = row->chars[j];
+        }
+    }
+
+    // Terminate render string with null char
+    row->render[idx] = '\0';
+
+    // idx contains the number of chars we copied into render
+    // Assign it to render size
+    row->rsize = idx;
+}
+
 // Appends line read from file to as new entry to erow struct array
 void editorAppendRow(char *s, size_t len) {
     // Reallocate memory to resize array to append new line
@@ -283,6 +330,13 @@ void editorAppendRow(char *s, size_t len) {
 
     // Terminate string with null char
     E.row[at].chars[len] = '\0';
+
+    // Initialize render
+    E.row[at].rsize = 0;
+    E.row[at].render = NULL;
+
+    // Update render string
+    editorUpdateRow(&E.row[at]);
 
     // Update number of rows
     E.numrows++;
@@ -438,20 +492,20 @@ void editorDrawRows(struct abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            // Get the length of the string
+            // Get the length (the render length specifically) of the string
             // Subtract the number of characters that are to the left of 
             // offset from the length of the row
-            int len = E.row[filerow].size - E.coloff;
+            int len = E.row[filerow].rsize - E.coloff;
 
             // len can be negative which means the user scrolled horizontally
             // past the end of the line, in that case, set len to 0 so that
             // nothing is displayed on that line
             if (len < 0) len = 0;
 
-            // Write out the string
+            // Write out the string (the render string specifically)
             // To display each row at the column offset,
             // E.coloff is used an index for the chars of each erow displayed
-            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
+            abAppend(ab, &E.row[filerow].render[E.coloff], len);
         }
 
         // Clear each line as they're redrawn instead 
