@@ -56,7 +56,13 @@ typedef struct erow {
 // Global struct to contain editor state
 struct editorConfig {
     // Cursor's x and y position
+    // cx is an index into the chars field of an erow
     int cx, cy;
+
+    // Index into into the render field
+    // If there are no tabs on the current line, rx = cx
+    // If there are tabs, rx > cx by however many extra spaces those tabs take up when rendered
+    int rx;
 
     // Track of what row of the file the user is currently scrolled to
     int rowoff;
@@ -272,6 +278,27 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** row operations ***/
 
+// Calculate the value of the horizontal render position
+int editorRowCxToRx(erow *row, int cx) {
+    int rx = 0;
+    int j;
+
+    // Loop through all the chars to the left of the cursor position (cx)
+    // and figure out how many spaces each tab takes up
+    for (j = 0; j < cx; j++) {
+        if (row->chars[j] == '\t')
+            // rx % TAB_STOP_LENGTH for how many columns we're to the right of the last tab stop
+            // TAB_STOP_LENGTH - 1 for how many columns we're to the left of the next tab stop
+            // Add to rx to get to the left of the next tab stop
+            rx += (TAB_STOP_LENGTH - 1) - (rx % TAB_STOP_LENGTH);
+        
+        // Go to the next tab stop
+        rx++;
+    }
+
+    return rx;
+}
+
 // Use the string of an erow to fill the contents of the render string
 void editorUpdateRow(erow *row) {
     int j;
@@ -423,6 +450,16 @@ void abFree(struct abuf *ab) {
 
 // Enable vertical scrolling
 void editorScroll() {
+    // Initialize render position
+    E.rx = 0;
+
+    // Check if the cursor is within a row
+    if (E.cy < E.numrows) {
+        // Calculate render position using the current
+        // cursor x position and the row at that y position
+        E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
+    }
+
     // Check if the cursor is above the visible window
     // If it is, scroll up to the cursor
     if (E.cy < E.rowoff) {
@@ -437,13 +474,17 @@ void editorScroll() {
 
     // Check if the cursor is left of the visible window
     // If it is, scroll lef to the cursor
-    if (E.cx < E.coloff) {
+    // NOTE: rx is being used since scrolling should take into account
+    // the chars that are actually rendered and rendered position of the cursor
+    if (E.rx < E.coloff) {
         E.coloff = E.cx;
     }
 
     // Check if the cursor is horizontally past the visible window
     // If it is, scroll right to the cursor
-    if (E.cx >= E.coloff + E.screencols) {
+    // NOTE: rx is being used since scrolling should take into account
+    // the chars that are actually rendered and rendered position of the cursor
+    if (E.rx >= E.coloff + E.screencols) {
         E.coloff = E.cx - E.screencols + 1;
     }
 }
@@ -546,7 +587,9 @@ void editorRefreshScreen() {
     // to move to and store it in the buffer
     // Add 1 to x and y position to convert 0 index values to 
     // 1 index values that the terminal uses
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1);
+    // NOTE: rx is being used since scrolling should take into account
+    // the chars that are actually rendered and rendered position of the cursor
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
 
     // Append formatted string to abuf
     abAppend(&ab, buf, strlen(buf));
@@ -675,6 +718,7 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.rowoff = 0;
     E.coloff = 0;
     E.numrows = 0;
