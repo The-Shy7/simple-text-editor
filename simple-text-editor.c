@@ -6,12 +6,14 @@
 
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
-#include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline()
+#include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
+#include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen()
+#include <string.h> // Acess memcpy(), strlen(), strdup()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
+#include <time.h> // Access time_t, time()
 #include <unistd.h> // Access read(), STDIN_FILENO, write()
 
 /*** defines ***/
@@ -84,6 +86,16 @@ struct editorConfig {
 
     // Pointer to array of erow structs to store multiple lines
     erow *row;
+
+    // Stores the filename when a file is opened 
+    char *filename;
+
+    // Stores current status message 
+    // Used for displaying messages to the user and prompt for input
+    char statusmsg[80];
+
+    // Timestamp for when the status message is set
+    time_t statusmsg_time;
 };
 
 struct editorConfig E;
@@ -373,6 +385,12 @@ void editorAppendRow(char *s, size_t len) {
 
 // Opens and reads a files from disk
 void editorOpen(char *filename) {
+    // Free used memory to update the filename
+    free(E.filename);
+
+    // Duplicate the filename and store it as a global state
+    E.filename = strdup(filename);
+
     // Opens the file that the user passed as the arg for reading
     FILE *fp = fopen(filename, "r");
 
@@ -554,11 +572,80 @@ void editorDrawRows(struct abuf *ab) {
         // Put <esc>[K sequence at the end of each line we draw
         abAppend(ab, "\x1b[K", 3);
 
-        // Print newline as last line
-        if (y < E.screenrows - 1) {
-            abAppend(ab, "\r\n", 2);
+        // Print newline as last line after last row
+        // since status bar is the final line drawn on screen
+        abAppend(ab, "\r\n", 2);
+    }
+}
+
+// Display the status bar with inverted colors on the screen
+void editorDrawStatusBar(struct abuf *ab) {
+    // <esc>[7m switches to inverted colors
+    abAppend(ab, "\x1b[7m", 4);
+    
+    // Declare buffer for file and line status message 
+    char status[80], rstatus[80];
+
+    // Create a formatted file status message and store it in the buffer
+    // The status message includes the filename and the number 
+    // of lines in the file, formatted as "<filename> - <numrows> lines"
+    // If the filename is NULL, use "[No Name]" instead
+    // The 'snprintf' function ensures that the status message doesn't exceed 
+    // the size of the status buffer, truncating the filename to 20 characters if needed
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", 
+    E.filename ? E.filename : "[No Name]", E.numrows);
+
+    // Create a formatted line status message and store it in the buffer
+    // The status message includes the current line number and number of rows
+    // Formatted at "<current line>/<numrows>"
+    // Current line stored in cy and we add 1 since cy is 0-indexed
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+
+    // If the length of the status doesn't fit inside 
+    // the width of the window, cut the string short for fit
+    if (len > E.screencols) len = E.screencols;
+
+    // Append the file status message
+    abAppend(ab, status, len);
+    
+    // Draw blank white status bar of inverted space characters
+    while (len < E.screencols) {
+        // If the line status string is against the right edge of the screen
+        // stop printing spaces and append the second status message
+        // Otherwise, print a space
+        if (E.screencols - len == rlen) {
+            abAppend(ab, rstatus, rlen);
+            break;
+        } else {
+            abAppend(ab, " ", 1);
+            len++;
         }
     }
+
+    // <esc>[m switches back to normal formatting
+    abAppend(ab, "\x1b[m", 3);
+
+    // Print new line after the first status bar 
+    // to allow space for the second status message
+    abAppend(ab, "\r\n", 2);
+}
+
+// Displays the status message
+void editorDrawMessageBar(struct abuf *ab) {
+    // Clear the message bar with <esc>[K sequence
+    abAppend(ab, "\x1b[K", 3);
+
+    // Get the length of the status message
+    int msglen = strlen(E.statusmsg);
+
+    // Truncate the message length if it is bigger than 
+    // the width of the screen
+    if (msglen > E.screencols) msglen = E.screencols;
+
+    // Display the status message only if the message
+    // is less than 5 seconds old
+    if (msglen && time(NULL) - E.statusmsg_time < 5)
+        abAppend(ab, E.statusmsg, msglen);
 }
 
 // Clear screen and reposition cursor for rendering 
@@ -579,6 +666,12 @@ void editorRefreshScreen() {
 
     // Draw tilde row buffer
     editorDrawRows(&ab);
+
+    // Draw the status bar on the second to last line of the screen
+    editorDrawStatusBar(&ab);
+
+    // Draw the status message on the last line of the screen
+    editorDrawMessageBar(&ab);
 
     // Declare buffer to store formatted string
     char buf[32];
@@ -602,6 +695,25 @@ void editorRefreshScreen() {
 
     // Free memory used by the abuf
     abFree(&ab);
+}
+
+// Variadic function that stores the status message 
+// in the global state and sets the message timestamp
+void editorSetStatusMessage(const char *fmt, ...) {
+    // Retrieve any additional args
+    va_list ap;
+
+    // Initialize the additional args after the fmt param
+    va_start(ap, fmt);
+
+    // Store resulting string to status message global buffer
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+
+    // Cleanup additional args
+    va_end(ap);
+
+    // Set to the current time when the status message was stored
+    E.statusmsg_time = time(NULL);
 }
 
 /*** input ***/
@@ -738,8 +850,16 @@ void initEditor() {
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.filename = NULL; // Will stay null if no file is opened
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
     
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+    
+    // Decrement by 2 so editorDrawRows() doesn’t try to draw a line of 
+    // text at the bottom of the screen and to allow space for the 
+    // status message to prompt users for input
+    E.screenrows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -749,6 +869,9 @@ int main(int argc, char *argv[]) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     }
+
+    // Set initial status message to help message with key bindings
+    editorSetStatusMessage("HELP: Ctrl-Q = quit");
 
     while (1) {
         editorRefreshScreen();
