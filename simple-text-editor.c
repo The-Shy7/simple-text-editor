@@ -9,7 +9,7 @@
 #include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
 #include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen(), strdup()
+#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
@@ -379,6 +379,48 @@ void editorAppendRow(char *s, size_t len) {
 
     // Update number of rows
     E.numrows++;
+}
+
+// Inserts a single char into an erow at a given position
+void editorRowInsertChar(erow *row, int at, int c) {
+    // Validate the index we want to insert into
+    // Allowed to go one char past the end of the string, so we insert at the end
+    if (at < 0 || at > row->size) at = row->size;
+
+    // Allocate one more byte for the chars of the erow
+    // Add 2 because we need to make space for the null byte
+    row->chars = realloc(row->chars, row->size + 2);
+
+    // Move the char at the index we are inserting to the next index
+    // Using memmove() because we are handling overlapping memory areas
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+
+    // Increment size of array 
+    row->size++;
+
+    // Assign character at the given position in the array
+    row->chars[at] = c;
+
+    // Update the render string to update the new row content
+    editorUpdateRow(row);
+}
+
+/*** editor operations ***/
+
+// Insert a character in the position that the cursor is at
+void editorInsertChar(int c) {
+    // If the cursor is on the tilde line after the end of the file,
+    // then we append a new row to the file before inserting a char
+    if (E.cy == E.numrows) {
+        editorAppendRow("", 0);
+    }
+
+    // Insert char at the cursor's position
+    editorRowInsertChar(&E.row[E.cy], E.cx, c);
+
+    // After inserting, move the cursor forward to allow
+    // the next char the user inserts to go after the inserted char
+    E.cx++;
 }
 
 /*** file i/o ***/
@@ -835,6 +877,12 @@ void editorProcessKeypress() {
         case ARROW_LEFT:
         case ARROW_RIGHT:
             editorMoveCursor(c);
+            break;
+        
+        // Allow any keypress that isn't mapped to another editor function
+        // to be inserted directly into the text being edited
+        default:
+            editorInsertChar(c);
             break;
     }
 }
