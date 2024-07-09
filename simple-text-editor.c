@@ -26,6 +26,7 @@
 // Represent keys with large integer values out of 
 // range for char to avoid conflicting with ordinary keypresses
 enum editorKey {
+    BACKSPACE = 127, // Actual ASCII value
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
@@ -831,6 +832,11 @@ void editorProcessKeypress() {
     int c = editorReadKey();
 
     switch (c) {
+        // Enter key
+        case '\r':
+            // TODO
+            break;
+
         // Exit program, clear screen, and reset cursor position
         case CTRL_KEY('q'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -848,6 +854,12 @@ void editorProcessKeypress() {
         case END_KEY:
             if (E.cy < E.numrows)
                 E.cx = E.row[E.cy].size;
+            break;
+        
+        case BACKSPACE:
+        case CTRL_KEY('h'):
+        case DEL_KEY:
+            // TODO
             break;
 
         // Scroll up and down the entire page
@@ -879,6 +891,11 @@ void editorProcessKeypress() {
             editorMoveCursor(c);
             break;
         
+        // Ignore the CTRL-L and Esc keypresses
+        case CTRL_KEY('l'):
+        case '\x1b':
+            break;
+
         // Allow any keypress that isn't mapped to another editor function
         // to be inserted directly into the text being edited
         default:
