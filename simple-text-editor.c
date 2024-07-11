@@ -21,6 +21,7 @@
 
 #define SIMPLE_TEXT_EDITOR_VERSION "0.0.1" // Version number for welcome message display
 #define TAB_STOP_LENGTH 8 // The length of a tab stop
+#define CONFIRM_QUIT_TIMES 3 // Require user to to quit 3 times to quit without saving
 #define CTRL_KEY(k) ((k) & 0x1f) // CTRL keypress macro
 
 // Keys that move the cursor or page in the editor
@@ -98,6 +99,10 @@ struct editorConfig {
 
     // Timestamp for when the status message is set
     time_t statusmsg_time;
+
+    // Track whether the text loaded in the editor differs from 
+    // what is in the file since opening or saving
+    int dirty;
 };
 
 struct editorConfig E;
@@ -385,6 +390,9 @@ void editorAppendRow(char *s, size_t len) {
 
     // Update number of rows
     E.numrows++;
+
+    // Increment in each row operation that makes a change to the text
+    E.dirty++;
 }
 
 // Inserts a single char into an erow at a given position
@@ -409,6 +417,9 @@ void editorRowInsertChar(erow *row, int at, int c) {
 
     // Update the render string to update the new row content
     editorUpdateRow(row);
+
+    // Increment in each row operation that makes a change to the text
+    E.dirty++;
 }
 
 /*** editor operations ***/
@@ -510,6 +521,9 @@ void editorOpen(char *filename) {
 
     // Close the file since we're done reading
     fclose(fp);
+
+    // File is unchanged when opened
+    E.dirty = 0;
 }
 
 // Write a string to disk
@@ -544,6 +558,9 @@ void editorSave() {
 
                 // Free the memory used by the buffer
                 free(buf);
+
+                // Once saved, file isn't "dirty" anymore
+                E.dirty = 0;
 
                 // Notify user that the save succeeded
                 editorSetStatusMessage("%d bytes written to disk", len);
@@ -725,10 +742,12 @@ void editorDrawStatusBar(struct abuf *ab) {
     // The status message includes the filename and the number 
     // of lines in the file, formatted as "<filename> - <numrows> lines"
     // If the filename is NULL, use "[No Name]" instead
+    // If the dirty flag is not 0 after the file is modified, then we show "(modified)"
     // The 'snprintf' function ensures that the status message doesn't exceed 
     // the size of the status buffer, truncating the filename to 20 characters if needed
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", 
-    E.filename ? E.filename : "[No Name]", E.numrows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", 
+        E.filename ? E.filename : "[No Name]", E.numrows, 
+        E.dirty ? "(modified)" : "");
 
     // Create a formatted line status message and store it in the buffer
     // The status message includes the current line number and number of rows
@@ -920,6 +939,10 @@ void editorMoveCursor(int key) {
 
 // Map keypresses to editor operations
 void editorProcessKeypress() {
+    // To quit without saving, we will require
+    // the user to Ctrl-Q 3 more times
+    static int quit_times = CONFIRM_QUIT_TIMES;
+
     // Get returned keypress
     int c = editorReadKey();
 
@@ -930,7 +953,16 @@ void editorProcessKeypress() {
             break;
 
         // Exit program, clear screen, and reset cursor position
+        // If quitting with unsaved changes, then the user will need to 
+        // Ctrl-Q 3 more times to fully exit the editor
         case CTRL_KEY('q'):
+            if (E.dirty && quit_times > 0) {
+                editorSetStatusMessage("WARNING!!! File has unsaved changes. "
+                    "Press Ctrl-Q %d more times to quit.", quit_times);
+                quit_times--;
+                return;
+            }
+
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
@@ -999,6 +1031,9 @@ void editorProcessKeypress() {
             editorInsertChar(c);
             break;
     }
+
+    // Reset the quit counter
+    quit_times = CONFIRM_QUIT_TIMES;
 }
 
 /*** init ***/
@@ -1012,6 +1047,7 @@ void initEditor() {
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.dirty = 0;
     E.filename = NULL; // Will stay null if no file is opened
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;
