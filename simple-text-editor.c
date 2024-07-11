@@ -6,15 +6,16 @@
 
 #include <ctype.h> // Access iscntrl()
 #include <errno.h> // Access errno, EAGAIN
+#include <fcntl.h> // Access open(), O_RDWR, O_CREAT
 #include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
 #include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove()
+#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
 #include <time.h> // Access time_t, time()
-#include <unistd.h> // Access read(), STDIN_FILENO, write()
+#include <unistd.h> // Access read(), STDIN_FILENO, write(), ftruncate(), close()
 
 /*** defines ***/
 
@@ -100,6 +101,10 @@ struct editorConfig {
 };
 
 struct editorConfig E;
+
+/*** function prototypes ***/
+
+void editorSetStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
 
@@ -426,6 +431,42 @@ void editorInsertChar(int c) {
 
 /*** file i/o ***/
 
+// Converts erow struct array into a single string
+// that will be written out to a file
+char *editorRowsToString(int *buflen) {
+    int totlen = 0;
+    int j;
+
+    // Add all of the lengths of row of text
+    // Add 1 to each row to account newline char 
+    // that will be added at the end of each line
+    for (j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1;
+
+    // Save the total length to tell caller how long the string is
+    *buflen = totlen;
+
+    // Allocate space for a buffer based on the total string length
+    char *buf = malloc(totlen);
+    
+    // Set a pointer to the buffer, so the buffer maintains
+    // its pointer at the start and to be used later
+    // to free the allocated memory
+    char *p = buf;
+
+    // Loop through the rows and copy the contents to the 
+    // end of the buffer and append a newline char after each row
+    for (j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p = '\n';
+        p++;
+    }
+
+    // Return the buffer, expect caller to free memory
+    return buf;
+}
+
 // Opens and reads a files from disk
 void editorOpen(char *filename) {
     // Free used memory to update the filename
@@ -469,6 +510,57 @@ void editorOpen(char *filename) {
 
     // Close the file since we're done reading
     fclose(fp);
+}
+
+// Write a string to disk
+// Note: string is returned by editorRowsToString()
+void editorSave() {
+    // If it's a new file, exit function 
+    // The filename will be null and we don't know 
+    // where to save the file, exit function
+    if (E.filename == NULL) return;
+
+    int len;
+
+    // Get the string that will be saved to disk
+    char *buf = editorRowsToString(&len);
+    
+    // Open the file for reading and writing from the given filename if it exists
+    // Create a new file if it doesn't exist 
+    // Note: 0644 is file permissions for the owner to read and write the file
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+
+    // If there's an error opening the file, close the file
+    if (fd != -1) {
+        // Set the file's size to the specified length 
+        // If the file is larger, then the data is cut off at the end of the file
+        // If the file is smaller, then it will add 0 bytes at the end to get the length
+        // If truncation fails, we expect write() to return the number of specified bytes
+        if (ftruncate(fd, len) != -1) {
+            // Write the string to the file destination
+            if (write(fd, buf, len) == len) {
+                // Close the file
+                close(fd);
+
+                // Free the memory used by the buffer
+                free(buf);
+
+                // Notify user that the save succeeded
+                editorSetStatusMessage("%d bytes written to disk", len);
+
+                return;
+            }
+        }
+
+        // Close the file
+        close(fd);
+    }
+
+    // Free the memory used by the buffer
+    free(buf);
+
+    // On error, notify the user that the save failed
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 }
 
 /*** append buffer ***/
@@ -843,6 +935,11 @@ void editorProcessKeypress() {
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
+        
+        // Save file to disk
+        case CTRL_KEY('s'):
+            editorSave();
+            break;
 
         // TEMPORARY: Move cursor to left edge of screen
         case HOME_KEY:
@@ -936,7 +1033,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Set initial status message to help message with key bindings
-    editorSetStatusMessage("HELP: Ctrl-Q = quit");
+    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
     while (1) {
         editorRefreshScreen();
