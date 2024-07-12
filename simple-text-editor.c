@@ -110,6 +110,8 @@ struct editorConfig E;
 /*** function prototypes ***/
 
 void editorSetStatusMessage(const char *fmt, ...);
+void editorRefreshScreen();
+char *editorPrompt(char *prompt);
 
 /*** terminal ***/
 
@@ -663,10 +665,18 @@ void editorOpen(char *filename) {
 // Write a string to disk
 // Note: string is returned by editorRowsToString()
 void editorSave() {
-    // If it's a new file, exit function 
-    // The filename will be null and we don't know 
-    // where to save the file, exit function
-    if (E.filename == NULL) return;
+    // If it's a new file, prompt the user for a filename to save as
+    if (E.filename == NULL) {
+        // Prompt the user for filename
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)");
+        
+        // If user aborts the save, then display a message
+        // indicating that action and exit the function
+        if (E.filename == NULL) {
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    }
 
     int len;
 
@@ -1005,6 +1015,74 @@ void editorSetStatusMessage(const char *fmt, ...) {
 }
 
 /*** input ***/
+
+// Displays a prompt in the status bar and let
+// the user input a line of text after the prompt
+char *editorPrompt(char *prompt) {
+    // Buffer size
+    size_t bufsize = 128;
+
+    // Buffer to store user input
+    char *buf = malloc(bufsize);
+
+    // Initialize buffer as empty string
+    size_t buflen = 0;
+    buf[0] = '\0';
+
+    // Infinite loop that repeatedly sets the status message,
+    // refreshes the screen, and waits for a keypress to handle
+    while (1) {
+        // Set status message
+        editorSetStatusMessage(prompt, buf);
+
+        // Refresh screen
+        editorRefreshScreen();
+
+        // Get the keypress input
+        int c = editorReadKey();
+        
+        // If the keypress is Delete, Ctrl-H, or Backspace, then delete the 
+        // last char in the user's input by replacing it with a null byte
+        // If keypress is Esc, cancel the input prompt
+        // If keypress is Enter and the input is not empty,
+        // then the status message is cleared and the user input is returned
+        // Otherwise, when the user inputs a printable char, append it
+        // to the buffer and if the buffer length is at the max, then double the 
+        // the buffer size and allocate the memory before appending to the buffer
+        // Note: we check if the input isn't a special key as specified in the editorKey
+        // enum, so the inputs are in the range of a char (< 128)
+        if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+            // If the buffer is not empty, then overwrite last char in the buffer
+            // as a null byte and decrement the buffer length
+            if (buflen != 0) buf[--buflen] = '\0';
+        } else if (c == '\x1b') {
+            // Clear status message
+            editorSetStatusMessage("");
+            
+            // Free buffer 
+            free(buf);
+
+            // Return null to abort the save operation
+            return NULL;
+        } else if (c == '\r') {
+            if (buflen != 0) {
+                editorSetStatusMessage("");
+                return buf;
+            }
+        } else if (!iscntrl(c) && c < 128) {
+            if (buflen == bufsize - 1) {
+                bufsize *= 2;
+                buf = realloc(buf, bufsize);
+            }
+
+            // Append to the buffer
+            buf[buflen++] = c;
+
+            // Append null byte at the end of the buffer
+            buf[buflen] = '\0';
+        }
+    }
+}
 
 // Allow user to move cursor using arrow keys if within the bounds
 void editorMoveCursor(int key) {
