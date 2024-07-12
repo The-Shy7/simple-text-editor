@@ -361,13 +361,16 @@ void editorUpdateRow(erow *row) {
     row->rsize = idx;
 }
 
-// Appends line read from file to as new entry to erow struct array
-void editorAppendRow(char *s, size_t len) {
+// Inserts a row at the specified index 
+void editorInsertRow(int at, char *s, size_t len) {
+    // If the index is not within the row, then exit the function
+    if (at < 0 || at > E.numrows) return;
+
     // Reallocate memory to resize array to append new line
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
 
-    // Index of the new row we want to initialize 
-    int at = E.numrows;
+    // Shift the rows to make room at the specified index for the new row
+    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
 
     // Set row size to length of the line
     E.row[at].size = len;
@@ -495,7 +498,7 @@ void editorInsertChar(int c) {
     // If the cursor is on the tilde line after the end of the file,
     // then we append a new row to the file before inserting a char
     if (E.cy == E.numrows) {
-        editorAppendRow("", 0);
+        editorInsertRow(E.numrows, "", 0);
     }
 
     // Insert char at the cursor's position
@@ -504,6 +507,42 @@ void editorInsertChar(int c) {
     // After inserting, move the cursor forward to allow
     // the next char the user inserts to go after the inserted char
     E.cx++;
+}
+
+// Inserts a new line
+void editorInsertNewline() {
+    // If the cursor is at the start of a line,
+    // then insert a blank row before the line the cursor is on
+    // Otherwise, split the line the cursor is on into two rows
+    if (E.cx == 0) {
+        editorInsertRow(E.cy, "", 0);
+    } else {
+        // Get the current row
+        erow *row = &E.row[E.cy];
+
+        // Insert the row's chars right of the cursor to 
+        // create a new row after the current row
+        editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+
+        // Reassign pointer since realloc() might move 
+        // around and invalidate the pointer
+        row = &E.row[E.cy];
+
+        // Truncate the size of the current row by setting
+        // size to the position of the cursor
+        row->size = E.cx;
+
+        // Append null byte at the end of the current row 
+        // since it was truncated
+        row->chars[row->size] = '\0';
+
+        // Update the render string to update the current row content
+        editorUpdateRow(row);
+    }
+
+    // Move the cursor to the beginning of the row
+    E.cy++;
+    E.cx = 0;
 }
 
 // Deletes the character left of the cursor
@@ -608,7 +647,7 @@ void editorOpen(char *filename) {
             linelen--;
 
         // Append line to erow struct array
-        editorAppendRow(line, linelen);
+        editorInsertRow(E.numrows, line, linelen);
     }
 
     // Free the memory used by the buffer 
@@ -1042,9 +1081,9 @@ void editorProcessKeypress() {
     int c = editorReadKey();
 
     switch (c) {
-        // Enter key
+        // Enter key inserts a new line
         case '\r':
-            // TODO
+            editorInsertNewline();
             break;
 
         // Exit program, clear screen, and reset cursor position
