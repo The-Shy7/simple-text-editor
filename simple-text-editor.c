@@ -395,6 +395,31 @@ void editorAppendRow(char *s, size_t len) {
     E.dirty++;
 }
 
+// Frees the memory owned by the erow being deleted
+void editorFreeRow(erow *row) {
+    free(row->render);
+    free(row->chars);
+}
+
+// Deletes a row
+void editorDelRow(int at) {
+    // If the index is not within the row, then exit the function
+    if (at < 0 || at >= E.numrows) return;
+
+    // Free the memory of the row being deleted
+    editorFreeRow(&E.row[at]);
+
+    // Shift the row structs in the array to the left to accommodate for the deleted 
+    // row struct by overwriting it with the row structs that come after it
+    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+
+    // Decrement the number of rows
+    E.numrows--;
+
+    // Increment in each row operation that makes a change to the text
+    E.dirty++;
+}
+
 // Inserts a single char into an erow at a given position
 void editorRowInsertChar(erow *row, int at, int c) {
     // Validate the index we want to insert into
@@ -422,6 +447,47 @@ void editorRowInsertChar(erow *row, int at, int c) {
     E.dirty++;
 }
 
+// Appends a string to the end of a row
+void editorRowAppendString(erow *row, char *s, size_t len) {
+    // After appending, the row's new size is row->size + len + 1
+    // Allocate that much memory for the string to be stored in the row
+    row->chars = realloc(row->chars, row->size + len + 1);
+
+    // Copy the given string to the end of the current string content of the row
+    memcpy(&row->chars[row->size], s, len);
+
+    // Increase the row size by the length of the appended string
+    row->size += len;
+
+    // Append null byte at the end of the new string
+    row->chars[row->size] = '\0';
+
+    // Update the render string to update the new row content
+    editorUpdateRow(row);
+
+    // Increment in each row operation that makes a change to the text
+    E.dirty++;
+}
+
+// Deletes a character in an erow
+void editorRowDelChar(erow *row, int at) {
+    // If the index is not within the row, then exit the function
+    if (at < 0 || at >= row->size) return;
+
+    // Shift the chars to the left to accommodate for the deleted char
+    // by overwriting it with the chars that come after it
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+
+    // Decrement row size
+    row->size--;
+
+    // Update the render string to update the new row content
+    editorUpdateRow(row);
+
+    // Increment in each row operation that makes a change to the text
+    E.dirty++;
+}
+
 /*** editor operations ***/
 
 // Insert a character in the position that the cursor is at
@@ -438,6 +504,35 @@ void editorInsertChar(int c) {
     // After inserting, move the cursor forward to allow
     // the next char the user inserts to go after the inserted char
     E.cx++;
+}
+
+// Deletes the character left of the cursor
+void editorDelChar() {
+    // If cursor is at the end of the file, there's nothing
+    // to delete, so exit the function
+    if (E.cy == E.numrows) return;
+
+    // If cursor is at the beginning of the first line,
+    // there's nothing to do, so exit the function
+    if (E.cx == 0 && E.cy == 0) return;
+
+    // Get the row where the cursor is on
+    erow *row = &E.row[E.cy];
+
+    // If there's a char left of the cursor,
+    // proceed to delete it and move the cursor one to the left
+    // Otherwise if the cursor is at the beginning of ar row, 
+    // set the cursor to the end of the preceding line, append the current 
+    // line to the end of the preceding line, and delete the current line
+    if (E.cx > 0) {
+        editorRowDelChar(row, E.cx - 1);
+        E.cx--;
+    } else {
+        E.cx = E.row[E.cy - 1].size;
+        editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
+        editorDelRow(E.cy);
+        E.cy--;
+    }
 }
 
 /*** file i/o ***/
@@ -985,10 +1080,15 @@ void editorProcessKeypress() {
                 E.cx = E.row[E.cy].size;
             break;
         
+        // Delete a character left of the cursor
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
-            // TODO
+            // Pressing the right arrow and then backspace is
+            // the same as pressing the delete key and deleting
+            // the char to the right of the cursor
+            if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+            editorDelChar();
             break;
 
         // Scroll up and down the entire page
