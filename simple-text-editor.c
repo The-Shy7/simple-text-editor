@@ -10,7 +10,7 @@
 #include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
 #include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror()
+#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror(), strstr()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
@@ -303,7 +303,7 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** row operations ***/
 
-// Calculate the value of the horizontal render position
+// Calculate the value of the horizontal render position from the cursor position
 int editorRowCxToRx(erow *row, int cx) {
     int rx = 0;
     int j;
@@ -322,6 +322,32 @@ int editorRowCxToRx(erow *row, int cx) {
     }
 
     return rx;
+}
+
+// Calculate the cursor position from the horizontal render position
+int editorRowRxToCx(erow *row, int rx) {
+    int cur_rx = 0;
+    int cx;
+
+    // Loop through the chars in the string
+    for (cx = 0; cx < row->size; cx++) {
+        if (row->chars[cx] == '\t')
+            // rx % TAB_STOP_LENGTH for how many columns we're to the right of the last tab stop
+            // TAB_STOP_LENGTH - 1 for how many columns we're to the left of the next tab stop
+            // Add to rx to get to the left of the next tab stop
+            cur_rx += (TAB_STOP_LENGTH - 1) - (cur_rx % TAB_STOP_LENGTH);
+
+        // Go to the next tab stop
+        cur_rx++;
+
+        // When the current render position hits the given render position,
+        // return the current cursor position
+        if (cur_rx > rx) return cx;
+    }
+
+    // Return in the case that the caller provided a 
+    // render position that is out of range
+    return cx;
 }
 
 // Use the string of an erow to fill the contents of the render string
@@ -722,6 +748,51 @@ void editorSave() {
 
     // On error, notify the user that the save failed
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}
+
+
+/*** find ***/
+
+// Prompts the user fo a search query, search through all the rows 
+// in the file and if a row contains the query string, move the cursor to the match
+void editorFind() {
+    // Prompt the user for a query string to search
+    char *query = editorPrompt("Search: %s (ESC to cancel)");
+    
+    // If the query is null (user canceled the input prompt), abort the search
+    if (query == NULL) return;
+    
+    int i;
+    
+    // Loop through all the rows in the file
+    for (i = 0; i < E.numrows; i++) {
+        // Get the row
+        erow *row = &E.row[i];
+
+        // Check if the query is a substring of the current row
+        // Returns null if there's no match or a pointer to the matching
+        // substring if there's a match
+        char *match = strstr(row->render, query);
+
+        // If there's a match, move the cursor to the position
+        // where the matching substring is 
+        if (match) {
+            E.cy = i;
+
+            // Set the cursor position based on the render position
+            // Subtract the render pointer from the match pointer
+            // since it's already a pointer to the render string
+            E.cx = editorRowRxToCx(row, match - row->render);
+
+            // Scroll to the bottom of the file, so editorScroll() 
+            // will scroll up on the next refresh where the matching 
+            // line will be at the top of the screen
+            E.rowoff = E.numrows;
+            break;
+        }
+    }
+
+    free(query);
 }
 
 /*** append buffer ***/
@@ -1196,6 +1267,11 @@ void editorProcessKeypress() {
             if (E.cy < E.numrows)
                 E.cx = E.row[E.cy].size;
             break;
+
+        // Enables user to search within the file
+        case CTRL_KEY('f'):
+            editorFind();
+            break;
         
         // Delete a character left of the cursor
         case BACKSPACE:
@@ -1286,7 +1362,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Set initial status message to help message with key bindings
-    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 
     while (1) {
         editorRefreshScreen();
