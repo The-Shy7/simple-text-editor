@@ -756,18 +756,50 @@ void editorSave() {
 // Callback function that searches through all the rows in the file and if a 
 // row contains the query string, move the cursor to the match
 void editorFindCallback(char *query, int key) {
+    // Store the index of the row that the last match was on
+    // It will be -1 if there was no last match
+    static int last_match = -1;
+
+    // Store the direction of the search
+    // 1 for searching forward and -1 for searching backward
+    static int direction = 1;
+
     // If the user's keypress is either enter or escape,
-    // then they are attempting to leave search mode, so quit the function 
+    // then they are attempting to leave search mode, so quit the function
+    // last_match is reset to -1 unless an arrow key was pressed 
     if (key == '\r' || key == '\x1b') {
+        last_match = -1;
+        direction = 1;
         return;
+    } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+        direction = 1;
+    } else if (key == ARROW_LEFT || key == ARROW_UP) {
+        direction = -1;
+    } else {
+        last_match = -1;
+        direction = 1;
     }
+
+    // If there's no last match, we are searching forward
+    if (last_match == -1) direction = 1;
+
+    // Store the index of the current row we're searching
+    int current = last_match;
     
     int i;
     
     // Loop through all the rows in the file
     for (i = 0; i < E.numrows; i++) {
+        // Move the index in the direction being searched
+        current += direction;
+
+        // If the current index is past the top of the file, set it to the end of the file
+        // If the current index is at the end of the file, reset it back to the top of the file
+        if (current == -1) current = E.numrows - 1;
+        else if (current == E.numrows) current = 0;
+
         // Get the row
-        erow *row = &E.row[i];
+        erow *row = &E.row[current];
 
         // Check if the query is a substring of the current row
         // Returns null if there's no match or a pointer to the matching
@@ -777,7 +809,11 @@ void editorFindCallback(char *query, int key) {
         // If there's a match, move the cursor to the position
         // where the matching substring is 
         if (match) {
-            E.cy = i;
+            // Set the last match index to the current index that we searched
+            last_match = current;
+
+            // Set cursor y position to the current index we searched
+            E.cy = current;
 
             // Set the cursor position based on the render position
             // Subtract the render pointer from the match pointer
@@ -796,12 +832,25 @@ void editorFindCallback(char *query, int key) {
 // Prompts the user for a search query to search in 
 // the file for the user's matching query
 void editorFind() {
-    // Prompt the user for a query string to search
-    char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
+    // Store the user's current cursor position
+    int saved_cx = E.cx;
+    int saved_cy = E.cy;
+    int saved_coloff = E.coloff;
+    int saved_rowoff = E.rowoff;
 
-    // Free memory used by pointer pointing to the user's query input
+    // Prompt the user for a query string to search
+    char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
+
+    // If the search isn't canceled, free the memory used 
+    // by pointer pointing to the user's query input
+    // Otherwise, reset the cursor back to where the user started the search
     if (query) {
         free(query);
+    } else {
+        E.cx = saved_cx;
+        E.cy = saved_cy;
+        E.coloff = saved_coloff;
+        E.rowoff = saved_rowoff; 
     }
 }
 
