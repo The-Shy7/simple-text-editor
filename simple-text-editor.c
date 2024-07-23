@@ -111,7 +111,7 @@ struct editorConfig E;
 
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
-char *editorPrompt(char *prompt);
+char *editorPrompt(char *prompt, void (*callback)(char *, int));
 
 /*** terminal ***/
 
@@ -694,7 +694,7 @@ void editorSave() {
     // If it's a new file, prompt the user for a filename to save as
     if (E.filename == NULL) {
         // Prompt the user for filename
-        E.filename = editorPrompt("Save as: %s (ESC to cancel)");
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         
         // If user aborts the save, then display a message
         // indicating that action and exit the function
@@ -753,14 +753,14 @@ void editorSave() {
 
 /*** find ***/
 
-// Prompts the user fo a search query, search through all the rows 
-// in the file and if a row contains the query string, move the cursor to the match
-void editorFind() {
-    // Prompt the user for a query string to search
-    char *query = editorPrompt("Search: %s (ESC to cancel)");
-    
-    // If the query is null (user canceled the input prompt), abort the search
-    if (query == NULL) return;
+// Callback function that searches through all the rows in the file and if a 
+// row contains the query string, move the cursor to the match
+void editorFindCallback(char *query, int key) {
+    // If the user's keypress is either enter or escape,
+    // then they are attempting to leave search mode, so quit the function 
+    if (key == '\r' || key == '\x1b') {
+        return;
+    }
     
     int i;
     
@@ -791,8 +791,18 @@ void editorFind() {
             break;
         }
     }
+}
 
-    free(query);
+// Prompts the user for a search query to search in 
+// the file for the user's matching query
+void editorFind() {
+    // Prompt the user for a query string to search
+    char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
+
+    // Free memory used by pointer pointing to the user's query input
+    if (query) {
+        free(query);
+    }
 }
 
 /*** append buffer ***/
@@ -1089,7 +1099,10 @@ void editorSetStatusMessage(const char *fmt, ...) {
 
 // Displays a prompt in the status bar and let
 // the user input a line of text after the prompt
-char *editorPrompt(char *prompt) {
+// If function is provided as an arg, then it will be called 
+// after each keypress, passing the current search query 
+// inputted by the user and the last key they pressed
+char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
     // Buffer size
     size_t bufsize = 128;
 
@@ -1129,6 +1142,11 @@ char *editorPrompt(char *prompt) {
         } else if (c == '\x1b') {
             // Clear status message
             editorSetStatusMessage("");
+
+            // If callback function is provided, then call 
+            // it and pass the user input buffer and keypress 
+            // input to the function as args
+            if (callback) callback(buf, c);
             
             // Free buffer 
             free(buf);
@@ -1138,6 +1156,7 @@ char *editorPrompt(char *prompt) {
         } else if (c == '\r') {
             if (buflen != 0) {
                 editorSetStatusMessage("");
+                if (callback) callback(buf, c);
                 return buf;
             }
         } else if (!iscntrl(c) && c < 128) {
@@ -1152,6 +1171,11 @@ char *editorPrompt(char *prompt) {
             // Append null byte at the end of the buffer
             buf[buflen] = '\0';
         }
+
+        // If callback function is provided, then call 
+        // it and pass the user input buffer and keypress 
+        // input to the function as args
+        if (callback) callback(buf, c);
     }
 }
 
