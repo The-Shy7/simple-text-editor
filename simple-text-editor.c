@@ -10,7 +10,7 @@
 #include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
 #include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror(), strstr(), memset()
+#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror(), strstr(), memset(), strchr()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
@@ -318,6 +318,11 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** syntax highlighting ***/
 
+// Checks if a character is considered a separator character
+int is_separator(int c) {
+    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
 // Highlight the characters in an erow
 void editorUpdateSyntax(erow *row) {
     // Reallocate the needed memory since this might be a new row 
@@ -327,16 +332,37 @@ void editorUpdateSyntax(erow *row) {
 
     // Set all of the chars to HL_NORMAL by default
     // before we loop through the chars and set the digits
+    // Any unhighlighted chars will have a HL_NORMAL value
     memset(row->hl, HL_NORMAL, row->rsize);
 
-    int i;
+    // Track whether the previous char was a separator
+    // Set it to 1 (true) since we consider the beginning
+    // of the line to be a separator
+    int prev_sep = 1;
 
-    // Loop the the characters and set each digit 
-    // to a corresponding highlight integer 
-    for (i = 0; i < row->rsize; i++) {
-        if (isdigit(row->render[i])) {
+    int i = 0;
+
+    // Loop the the characters and set each char
+    // to a corresponding highlight integer/value
+    while (i < row->rsize) {
+        // Get the char in the render string
+        char c = row->render[i];
+
+        // Set the highlight type of the previous char
+        unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+        // Digits/numbers/decimals
+        if (isdigit(c) && (prev_sep || prev_hl == HL_NUMBER) || (c == '.' && prev_hl == HL_NUMBER)) {
             row->hl[i] = HL_NUMBER;
+            i++;
+            prev_sep = 0;
+            continue;
         }
+
+        // If no char was highlighted, set the current char
+        // according to whether it's a separator or not
+        prev_sep = is_separator(c);
+        i++;
     }
 }
 
