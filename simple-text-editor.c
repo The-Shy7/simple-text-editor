@@ -43,7 +43,8 @@ enum editorKey {
 // Contain the possible values of the erow highlight array
 enum editorHighlight {
     HL_NORMAL = 0,
-    HL_NUMBER
+    HL_NUMBER,
+    HL_MATCH
 };
 
 /*** data ***/
@@ -328,7 +329,6 @@ void editorUpdateSyntax(erow *row) {
     // before we loop through the chars and set the digits
     memset(row->hl, HL_NORMAL, row->rsize);
 
-
     int i;
 
     // Loop the the characters and set each digit 
@@ -345,6 +345,10 @@ int editorSyntaxToColor(int hl) {
     switch (hl) {
         // Numbers are highlighted red
         case HL_NUMBER: return 31;
+
+        // Search results are highlighted blue
+        case HL_MATCH: return 34;
+
         // Default is white
         default: return 37;
     }
@@ -818,6 +822,23 @@ void editorFindCallback(char *query, int key) {
     // 1 for searching forward and -1 for searching backward
     static int direction = 1;
 
+    // Use to know which line's hl needs to be restored
+    static int saved_hl_line;
+
+    // Save the original contents of hl
+    static char *saved_hl = NULL;
+
+    // If there's a line to restore, then copy the saved hl
+    // to the row's hl and deallocate the saved hl array
+    if (saved_hl) {
+        // Restore the row's hl 
+        memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
+
+        // Free the memory and set the pointer to null
+        free(saved_hl);
+        saved_hl = NULL;
+    }
+
     // If the user's keypress is either enter or escape,
     // then they are attempting to leave search mode, so quit the function
     // last_match is reset to -1 unless an arrow key was pressed 
@@ -878,6 +899,24 @@ void editorFindCallback(char *query, int key) {
             // will scroll up on the next refresh where the matching 
             // line will be at the top of the screen
             E.rowoff = E.numrows;
+
+            // Set the hl line we need to save to the current 
+            saved_hl_line = current;
+
+            // Allocate memory for the saved hl array
+            // NOTE: This memory is guaranteed to be freed
+            // because when the user closes the search prompt
+            // editorPrompt() calls this function so hl will
+            // be restored before it editorPrompt() returns
+            saved_hl = malloc(row->rsize);
+
+            // Copy over the row's hl to the saved hl array
+            memcpy(saved_hl, row->hl, row->rsize);
+
+            // Set the matched substring to HL_MATCH
+            // match - row->render is the index into render of the match, 
+            // so we use that as our index into hl
+            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }
