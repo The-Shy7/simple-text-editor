@@ -10,7 +10,7 @@
 #include <stdio.h> // Access printf(), perror(), sscanf(), snprintf(), FILE, fopen(), getline(), vsnprintf()
 #include <stdarg.h> // Access va_list, va_start(), va_end()
 #include <stdlib.h> // Access atexit(), exit(), realloc(), free(), malloc()
-#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror(), strstr(), memset(), strrchr(), strcmp()
+#include <string.h> // Acess memcpy(), strlen(), strdup(), memmove(), strerror(), strstr(), memset(), strrchr(), strcmp(), strncmp()
 #include <sys/ioctl.h> // Access ioctl(), TIOCGWINSZ, struct winsize
 #include <sys/types.h> // Access ssize_t
 #include <termios.h> // Access struct termios, tcgetattr(), tcsetattr(), ECHO, TCSAFLUSH, ICANON, ISIG, IXON, IEXTEN, ICRNL, OPOST, BRKINT, INPCK, ISTRIP, CS8, VMIN, VTIME
@@ -23,7 +23,8 @@
 #define TAB_STOP_LENGTH 8 // The length of a tab stop
 #define CONFIRM_QUIT_TIMES 3 // Require user to to quit 3 times to quit without saving
 #define CTRL_KEY(k) ((k) & 0x1f) // CTRL keypress macro
-#define HL_HIGHLIGHT_NUMBERS (1<<0) // Flag bit
+#define HL_HIGHLIGHT_NUMBERS (1<<0) // Flag bit for numbers
+#define HL_HIGHLIGHT_STRINGS (1<<1) // Flag bit for strings
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0])) // Constant to store the length of the HLDB array
 
 // Keys that move the cursor or page in the editor
@@ -45,6 +46,8 @@ enum editorKey {
 // Contain the possible values of the erow highlight array
 enum editorHighlight {
     HL_NORMAL = 0,
+    HL_STRING,
+    HL_COMMENT,
     HL_NUMBER,
     HL_MATCH
 };
@@ -59,6 +62,9 @@ struct editorSyntax {
     // Array of strings where each string contains a 
     // pattern to match a filename against
     char **filematch;
+
+    // Single-line comment pattern 
+    char *singleline_comment_start;
 
     // Bit field that contains flags for whether to highlight
     // numbers and whether to highlight strings for the filetype
@@ -155,7 +161,8 @@ struct editorSyntax HLDB[] = {
     {
         "c",
         C_HL_extensions,
-        HL_HIGHLIGHT_NUMBERS
+        "//",
+        HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
 };
 
@@ -376,10 +383,19 @@ void editorUpdateSyntax(erow *row) {
     // the line to the default highlighting
     if (E.syntax == NULL) return;
 
+    // Alias for the single-line comment syntax for the file
+    char *scs = E.syntax->singleline_comment_start;
+
+    // Set the length of the string or 0 if the string is null
+    int scs_len = scs ? strlen(scs) : 0;
+
     // Track whether the previous char was a separator
     // Set it to 1 (true) since we consider the beginning
     // of the line to be a separator
     int prev_sep = 1;
+
+    // Keep track of whether we're currently inside a string
+    int in_string = 0;
 
     int i = 0;
 
@@ -391,6 +407,59 @@ void editorUpdateSyntax(erow *row) {
 
         // Set the highlight type of the previous char
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+        // Check if the comment line has a length and if we're not in a string
+        // If checks pass, use strncmp() to check if this character is the start 
+        // of a single-line comment, if so, set the memory block for the whole 
+        // rest of the lien with HL_COMMENT and break out of the syntax highlighting loop
+        if (scs_len && !in_string) {
+            if (!strncmp(&row->render[i], scs, scs_len)) {
+                memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+                break;
+            }
+        }
+
+        // Check if the strings should be highlighted for the current filetype
+        if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+            // If we're in a string, then keep highlighting the 
+            // current character as a string until we hit the closing quote
+            // If we're not in a string, check if we’re at the beginning 
+            // of one by checking for a double- or single-quote, if we are,
+            // then store quote in in_string, highlight it with HL_STRING, and consume it
+            if (in_string) {
+                row->hl[i] = HL_STRING;
+
+                // If we’re in a string and the current character is a backslash, 
+                // and there’s at least one more character in that line that comes 
+                // after the backslash, then we highlight the character that comes 
+                // after the backslash with HL_STRING and consume it 
+                // Increment i by 2 to consume both characters at once.
+                if (c == '\\' && i + 1 < row->rsize) {
+                    row->hl[i + 1] = HL_STRING;
+                    i += 2;
+                    continue;
+                }
+
+                // Check if current char is the closing quote
+                // If so, reset in_string flag to 0
+                if (c == in_string) in_string = 0;
+
+                // Since we highlighted the current character, we have to 
+                // consume it by incrementing i and continuing out of the current loop iteration
+                // Set prev_sep to 1 so that if we’re done highlighting the string, 
+                // the closing quote is considered a separator
+                i++;
+                prev_sep = 1;
+                continue;
+            } else {
+                if (c == '"' || c == '\'') {
+                    in_string = c;
+                    row->hl[i] = HL_STRING;
+                    i++;
+                    continue;
+                }
+            }
+        }
 
         // Check if the numbers should be highlighted for the current filetype
         if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
@@ -415,6 +484,12 @@ int editorSyntaxToColor(int hl) {
     switch (hl) {
         // Numbers are highlighted red
         case HL_NUMBER: return 31;
+
+        // Strings are highlighted magenta
+        case HL_STRING: return 35;
+
+        // Comments are highlighted as cyan
+        case HL_COMMENT: return 36;
 
         // Search results are highlighted blue
         case HL_MATCH: return 34;
