@@ -1364,10 +1364,30 @@ void editorDrawRows(struct abuf *ab) {
             // Loop through the characters in the render string 
             int j;
             for (j = 0; j < len; j++) {
-                // If it's a normal char, set the text color to white
+                // If it's a control char, translate it into a printable char
+                // Else if it's a normal char, set the text color to white
                 // Otherwise, set the text color of the char depending
                 // on the type of char it is
-                if (hl[j] == HL_NORMAL) {
+                if (iscntrl(c[j])) {
+                    // Add the ctrl char to a @ char 
+                    // If it's not in the alphabetic range, replace it with
+                    // a ? char
+                    char sym = (c[j] <= 26) ? '@' + c[j] : '?';
+                    
+                    // Switch to inverted colors before printing the translated
+                    // char, then turn off inverted colors again
+                    abAppend(ab, "\x1b[7m", 4);
+                    abAppend(ab, &sym, 1);
+                    abAppend(ab, "\x1b[m", 3);
+
+                    // The <esc>[m  turns off all text formatting including colors
+                    // Print the esc sequence for the current color afterwards
+                    if (current_color != -1) {
+                        char buf[16];
+                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+                        abAppend(ab, buf, clen);
+                    }
+                } else if (hl[j] == HL_NORMAL) {
                     if (current_color != -1) {
                         // m command inverts colors
                         // Set the text color back to default white (9 = white)
