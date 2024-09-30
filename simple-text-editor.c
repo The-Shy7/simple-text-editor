@@ -48,6 +48,8 @@ enum editorHighlight {
     HL_NORMAL = 0,
     HL_STRING,
     HL_COMMENT,
+    HL_KEYWORD1,
+    HL_KEYWORD2,
     HL_NUMBER,
     HL_MATCH
 };
@@ -62,6 +64,10 @@ struct editorSyntax {
     // Array of strings where each string contains a 
     // pattern to match a filename against
     char **filematch;
+
+    // Null terminated array of strings
+    // Each string contains a keyword
+    char **keywords;
 
     // Single-line comment pattern 
     char *singleline_comment_start;
@@ -154,6 +160,15 @@ struct editorConfig E;
 // List of file extensions
 char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 
+// To differentiate between two types of keywords,
+// terminate common type keywords with a pipe char
+char *C_HL_keywords[] = {
+  "switch", "if", "while", "for", "break", "continue", "return", "else",
+  "struct", "union", "typedef", "static", "enum", "class", "case",
+  "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
+  "void|", NULL
+};
+
 // Array of editorSyntax structs
 // HLDB = "highlight database"
 struct editorSyntax HLDB[] = {
@@ -161,6 +176,7 @@ struct editorSyntax HLDB[] = {
     {
         "c",
         C_HL_extensions,
+        C_HL_keywords,
         "//",
         HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
@@ -383,6 +399,9 @@ void editorUpdateSyntax(erow *row) {
     // the line to the default highlighting
     if (E.syntax == NULL) return;
 
+    // Make an alias for the keywords array in syntax struct 
+    char **keywords = E.syntax->keywords;
+
     // Alias for the single-line comment syntax for the file
     char *scs = E.syntax->singleline_comment_start;
 
@@ -472,6 +491,50 @@ void editorUpdateSyntax(erow *row) {
             }
         }
 
+        // Keywords require separator before and after the keyword
+        // Otherwise the keyword substring in other strings would be highlighted 
+        // Check to make sure a separator came before the keyword prior to 
+        // looping through each possible keyword 
+        if (prev_sep) {
+            int j;
+            
+            // Loop through each keyword
+            for (j = 0; keywords[j]; j++) {
+                // Store the length of the keyword
+                int klen = strlen(keywords[j]);
+
+                // If it's a secondary keyword, decrement
+                // length to account for the pipe char
+                int kw2 = keywords[j][klen - 1] == '|';
+                if (kw2) klen--;
+                
+                // Check if keyword exists at current position in text
+                // and check if a separator char comes after the keyword
+                // Since null char is considered a separator, this works 
+                // at the very end of the line
+                if (!strncmp(&row->render[i], keywords[j], klen) && is_separator(row->render[i + klen])) {
+                    // We have a keyword to highlight 
+                    // Highlight whole keyword at once depending on the value of kw2
+                    memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen);
+
+                    // Consume entire keyword by incrementing i by length of keyword
+                    i += klen;
+
+                    // Break because we're in an inner loop, so break before
+                    // continuing the outer loop 
+                    break;
+                }
+            }
+
+            // Check if the loop was broken out by seeing
+            // if it got to the terminating null value
+            // If it was broken out of, continue
+            if (keywords[j] != NULL) {
+                prev_sep = 0;
+                continue;
+            }
+        }
+
         // If no char was highlighted, set the current char
         // according to whether it's a separator or not
         prev_sep = is_separator(c);
@@ -490,6 +553,12 @@ int editorSyntaxToColor(int hl) {
 
         // Comments are highlighted as cyan
         case HL_COMMENT: return 36;
+
+        // Specify two keyword types
+        // Actual keywords in one color (yellow) and 
+        // common type names in another color (green)
+        case HL_KEYWORD1: return 33;
+        case HL_KEYWORD2: return 32;
 
         // Search results are highlighted blue
         case HL_MATCH: return 34;
